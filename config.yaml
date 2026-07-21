@@ -1,0 +1,36 @@
+# Edit these. Symbols are MEXC Futures perpetual names (BASE_USDT).
+symbols:
+  - BTC_USDT
+  - ETH_USDT
+  - SOL_USDT
+
+# Timeframes (MEXC-supported only): 1m 5m 15m 30m 1h 4h 8h 1d 1w
+higher_tf: 4h     # direction
+middle_tf: 1h     # setup
+lower_tf: 15m     # entry
+
+# Risk
+balance: 1000.0   # account size in USDT used for position sizing
+risk_pct: 0.01    # 0.01 = 1% risked per trade
+min_rr: 1.5       # skip trades with reward:risk below this
+max_stop_pct: 0.05  # skip if stop is wider than 5% of entry
+
+# Stops (ATR = Average True Range on the entry timeframe)
+stop_mode: swing_atr   # swing | atr | swing_atr
+atr_period: 14
+atr_mult: 2.0          # entry +/- atr_mult*ATR  (when stop_mode: atr)
+atr_buffer_mult: 0.5   # swing +/- buffer*ATR    (when stop_mode: swing_atr)
+
+# RSI entry filter (reject over-extended entries)
+rsi_enabled: true
+rsi_period: 14
+rsi_overbought: 70
+rsi_oversold: 30
+
+# Entry triggers (any TRUE one fires a signal)
+triggers:
+  close_back_ema21: true
+  engulfing: true
+  rejection: true
+  break_structure: true
+  hl_then_hh: true
