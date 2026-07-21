@@ -81,6 +81,15 @@ def test_load_config_without_file_returns_defaults():
     assert cfg["risk_pct"] == 0.01
 
 
+def test_defaults_include_atr_and_rsi_settings():
+    d = config.DEFAULTS
+    assert d["stop_mode"] == "swing_atr"
+    assert d["atr_period"] == 14
+    assert d["rsi_enabled"] is True
+    assert d["rsi_overbought"] == 70.0
+    assert d["rsi_oversold"] == 30.0
+
+
 def test_load_config_merges_overrides(tmp_path):
     p = tmp_path / "config.yaml"
     p.write_text("risk_pct: 0.005\nsymbols: [BTC_USDT]\n")
@@ -147,6 +156,16 @@ DEFAULTS = {
     "balance": 1000.0,
     "risk_pct": 0.01,
     "kline_limit": 400,
+    # ATR-based stops
+    "atr_period": 14,
+    "stop_mode": "swing_atr",   # "swing" | "atr" | "swing_atr"
+    "atr_mult": 2.0,            # used when stop_mode == "atr"
+    "atr_buffer_mult": 0.5,     # used when stop_mode == "swing_atr"
+    # RSI entry filter
+    "rsi_enabled": True,
+    "rsi_period": 14,
+    "rsi_overbought": 70.0,
+    "rsi_oversold": 30.0,
     "triggers": {
         "close_back_ema21": True,
         "engulfing": True,
@@ -205,6 +224,18 @@ risk_pct: 0.01    # 0.01 = 1% risked per trade
 min_rr: 1.5       # skip trades with reward:risk below this
 max_stop_pct: 0.05  # skip if stop is wider than 5% of entry
 
+# Stops (ATR = Average True Range on the entry timeframe)
+stop_mode: swing_atr   # swing | atr | swing_atr
+atr_period: 14
+atr_mult: 2.0          # entry +/- atr_mult*ATR  (when stop_mode: atr)
+atr_buffer_mult: 0.5   # swing +/- buffer*ATR    (when stop_mode: swing_atr)
+
+# RSI entry filter (reject over-extended entries)
+rsi_enabled: true
+rsi_period: 14
+rsi_overbought: 70
+rsi_oversold: 30
+
 # Entry triggers (any TRUE one fires a signal)
 triggers:
   close_back_ema21: true
@@ -217,7 +248,7 @@ triggers:
 - [ ] **Step 8: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_config.py -v`
-Expected: 4 passed.
+Expected: 5 passed.
 
 - [ ] **Step 9: Commit**
 
@@ -228,7 +259,7 @@ git commit -m "feat: config loader with timeframe validation and defaults"
 
 ---
 
-### Task 2: EMA indicators
+### Task 2: EMA, ATR, and RSI indicators
 
 **Files:**
 - Create: `signalbot/indicators.py`
@@ -240,6 +271,14 @@ git commit -m "feat: config loader with timeframe validation and defaults"
   - `signalbot.indicators.ema(series: pd.Series, period: int) -> pd.Series`
   - `signalbot.indicators.add_emas(df: pd.DataFrame, periods: list[int]) -> pd.DataFrame`
     — returns a copy with an `ema{p}` column per period.
+  - `signalbot.indicators.atr(df: pd.DataFrame, period: int) -> pd.Series`
+    — Wilder's Average True Range from `high`/`low`/`close`.
+  - `signalbot.indicators.add_atr(df: pd.DataFrame, period: int) -> pd.DataFrame`
+    — returns a copy with an `atr{period}` column.
+  - `signalbot.indicators.rsi(series: pd.Series, period: int) -> pd.Series`
+    — Wilder's RSI on close.
+  - `signalbot.indicators.add_rsi(df: pd.DataFrame, period: int) -> pd.DataFrame`
+    — returns a copy with an `rsi{period}` column.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -266,6 +305,43 @@ def test_add_emas_adds_named_columns():
     assert len(out) == 4
     # original untouched
     assert "ema2" not in df.columns
+
+
+def test_atr_of_constant_range_equals_range():
+    # every candle spans 2.0 with no gaps -> true range is always 2.0 -> ATR 2.0
+    df = pd.DataFrame({
+        "high": [12, 12, 12, 12, 12],
+        "low": [10, 10, 10, 10, 10],
+        "close": [11, 11, 11, 11, 11],
+    })
+    out = indicators.atr(df, 3).tolist()
+    assert abs(out[-1] - 2.0) < 1e-9
+
+
+def test_add_atr_adds_named_column():
+    df = pd.DataFrame({"high": [2, 3], "low": [1, 2], "close": [1.5, 2.5]})
+    out = indicators.add_atr(df, 2)
+    assert "atr2" in out.columns
+    assert "atr2" not in df.columns
+
+
+def test_rsi_rising_series_near_100():
+    s = pd.Series([float(i) for i in range(1, 30)])  # strictly increasing
+    val = indicators.rsi(s, 14).iloc[-1]
+    assert val > 99.0
+
+
+def test_rsi_falling_series_near_0():
+    s = pd.Series([float(i) for i in range(30, 1, -1)])  # strictly decreasing
+    val = indicators.rsi(s, 14).iloc[-1]
+    assert val < 1.0
+
+
+def test_add_rsi_adds_named_column():
+    df = pd.DataFrame({"close": [float(i) for i in range(1, 20)]})
+    out = indicators.add_rsi(df, 14)
+    assert "rsi14" in out.columns
+    assert "rsi14" not in df.columns
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -289,18 +365,57 @@ def add_emas(df: pd.DataFrame, periods: list[int]) -> pd.DataFrame:
     for p in periods:
         out[f"ema{p}"] = ema(out["close"], p)
     return out
+
+
+def atr(df: pd.DataFrame, period: int) -> pd.Series:
+    prev_close = df["close"].shift(1)
+    tr = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    # Wilder's smoothing == EWM with alpha = 1/period
+    return tr.ewm(alpha=1 / period, adjust=False).mean()
+
+
+def add_atr(df: pd.DataFrame, period: int) -> pd.DataFrame:
+    out = df.copy()
+    out[f"atr{period}"] = atr(out, period)
+    return out
+
+
+def rsi(series: pd.Series, period: int) -> pd.Series:
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    out = 100 - 100 / (1 + rs)
+    # no losses at all -> rs is inf -> RSI 100 (avoid NaN from divide-by-zero)
+    out = out.where(avg_loss != 0, 100.0)
+    return out.astype(float)
+
+
+def add_rsi(df: pd.DataFrame, period: int) -> pd.DataFrame:
+    out = df.copy()
+    out[f"rsi{period}"] = rsi(out["close"], period)
+    return out
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_indicators.py -v`
-Expected: 2 passed.
+Expected: 8 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add signalbot/indicators.py tests/test_indicators.py
-git commit -m "feat: EMA indicator helpers"
+git commit -m "feat: EMA, ATR, and RSI indicator helpers"
 ```
 
 ---
@@ -630,10 +745,12 @@ git commit -m "feat: MEXC futures kline fetch and parse"
     `ema{fast}`, OHLC columns; returns the name of the first enabled trigger that
     fired.
   - `evaluate(symbol, htf, mtf, ltf, cfg) -> Signal | None` — DataFrames already
-    carry the EMA columns (added by the caller).
+    carry the EMA (and ATR/RSI) columns (added by the caller).
 
-Note: `htf` must have `ema{ema_slow}` and `ema{ema_trend}`; `mtf`/`ltf` must have
-`ema{ema_fast}` and `mtf` also `ema{ema_mid}`. The caller (`main.py`) adds these.
+Note: `htf` must have `ema{ema_slow}` and `ema{ema_trend}`; `mtf` must have
+`ema{ema_fast}` and `ema{ema_mid}`; `ltf` must have `ema{ema_fast}`, plus
+`atr{atr_period}` when `stop_mode` uses ATR, and `rsi{rsi_period}` when
+`rsi_enabled`. The caller (`main.py`) adds all of these.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -728,7 +845,8 @@ def test_evaluate_end_to_end_long_produces_signal():
     c = cfg(ema_fast=21, ema_mid=55, ema_slow=100, ema_trend=200,
             swing_strength=1, pullback_lookback=5, tolerance=0.2,
             swing_lookback=3, min_rr=0.1, max_stop_pct=0.9,
-            balance=1000.0, risk_pct=0.01)
+            balance=1000.0, risk_pct=0.01,
+            stop_mode="swing", rsi_enabled=False)
     sig = strategy.evaluate("BTC_USDT", htf, mtf, ltf, c)
     assert sig is not None
     assert sig.direction == "long"
@@ -751,8 +869,56 @@ def test_evaluate_skips_when_rr_too_low():
         "low": [9, 8, 8.5], "close": [10, 9, 10.5], "ema21": [10, 10, 10],
     })
     c = cfg(ema_fast=21, ema_mid=55, swing_strength=1, pullback_lookback=5,
-            tolerance=0.2, swing_lookback=3, min_rr=99.0, max_stop_pct=0.9)
+            tolerance=0.2, swing_lookback=3, min_rr=99.0, max_stop_pct=0.9,
+            stop_mode="swing", rsi_enabled=False)
     assert strategy.evaluate("BTC_USDT", htf, mtf, ltf, c) is None
+
+
+def _long_frames():
+    """Bull HTF + valid MTF setup + close-back trigger LTF, for filter tests."""
+    htf = _htf_bull()
+    mtf = pd.DataFrame({"high": [20] * 7, "low": [5, 3, 6, 4, 7, 5, 8],
+                        "close": [18] * 7, "open": [18] * 7})
+    mtf["ema21"] = [17.9] * 7
+    mtf["ema55"] = [17.0] * 7
+    ltf = pd.DataFrame({
+        "time": [1, 2, 3],
+        "open": [10, 10, 9.0], "high": [11, 11, 11],
+        "low": [9, 8, 8.5], "close": [10, 9, 10.5], "ema21": [10, 10, 10],
+    })
+    return htf, mtf, ltf
+
+
+def test_atr_stop_is_wider_than_raw_swing():
+    htf, mtf, ltf = _long_frames()
+    ltf["atr14"] = [1.0, 1.0, 1.0]   # buffer below the swing low
+    base = cfg(ema_fast=21, ema_mid=55, swing_strength=1, pullback_lookback=5,
+               tolerance=0.2, swing_lookback=3, min_rr=0.1, max_stop_pct=0.9,
+               rsi_enabled=False)
+    swing_sig = strategy.evaluate("BTC_USDT", htf, mtf, ltf,
+                                  {**base, "stop_mode": "swing"})
+    atr_sig = strategy.evaluate("BTC_USDT", htf, mtf, ltf,
+                                {**base, "stop_mode": "swing_atr",
+                                 "atr_period": 14, "atr_buffer_mult": 0.5})
+    assert atr_sig.stop < swing_sig.stop   # padded further below the swing
+
+
+def test_rsi_gate_blocks_overbought_long():
+    htf, mtf, ltf = _long_frames()
+    ltf["rsi14"] = [50, 60, 80]   # last candle overbought
+    c = cfg(ema_fast=21, ema_mid=55, swing_strength=1, pullback_lookback=5,
+            tolerance=0.2, swing_lookback=3, min_rr=0.1, max_stop_pct=0.9,
+            stop_mode="swing", rsi_enabled=True, rsi_overbought=70)
+    assert strategy.evaluate("BTC_USDT", htf, mtf, ltf, c) is None
+
+
+def test_rsi_gate_allows_normal_long():
+    htf, mtf, ltf = _long_frames()
+    ltf["rsi14"] = [50, 55, 58]   # not overbought
+    c = cfg(ema_fast=21, ema_mid=55, swing_strength=1, pullback_lookback=5,
+            tolerance=0.2, swing_lookback=3, min_rr=0.1, max_stop_pct=0.9,
+            stop_mode="swing", rsi_enabled=True, rsi_overbought=70)
+    assert strategy.evaluate("BTC_USDT", htf, mtf, ltf, c) is not None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -919,6 +1085,37 @@ def _find_target(mtf, htf, direction, entry, strength):
         return max(below) if below else None
 
 
+def _rsi_ok(ltf, dirn, cfg) -> bool:
+    if not cfg.get("rsi_enabled"):
+        return True
+    rsi_val = float(ltf[f"rsi{cfg['rsi_period']}"].iloc[-1])
+    if dirn == "long":
+        return rsi_val < cfg["rsi_overbought"]
+    return rsi_val > cfg["rsi_oversold"]
+
+
+def _compute_stop(ltf, dirn, entry, cfg) -> float:
+    mode = cfg["stop_mode"]
+    recent = ltf.iloc[-cfg["swing_lookback"]:]
+    atr_val = None
+    if mode in ("atr", "swing_atr"):
+        atr_val = float(ltf[f"atr{cfg['atr_period']}"].iloc[-1])
+    if dirn == "long":
+        swing = float(recent["low"].min())
+        if mode == "swing":
+            return swing
+        if mode == "atr":
+            return entry - cfg["atr_mult"] * atr_val
+        return swing - cfg["atr_buffer_mult"] * atr_val  # swing_atr
+    else:
+        swing = float(recent["high"].max())
+        if mode == "swing":
+            return swing
+        if mode == "atr":
+            return entry + cfg["atr_mult"] * atr_val
+        return swing + cfg["atr_buffer_mult"] * atr_val  # swing_atr
+
+
 def evaluate(symbol, htf, mtf, ltf, cfg) -> Signal | None:
     dirn = direction(htf, cfg)
     if dirn is None:
@@ -928,17 +1125,14 @@ def evaluate(symbol, htf, mtf, ltf, cfg) -> Signal | None:
     fired = trigger(ltf, dirn, cfg)
     if fired is None:
         return None
+    if not _rsi_ok(ltf, dirn, cfg):
+        return None
 
     strength = cfg["swing_strength"]
-    swing_look = cfg["swing_lookback"]
     last = ltf.iloc[-1]
     entry = float(last["close"])
-    recent = ltf.iloc[-swing_look:]
 
-    if dirn == "long":
-        stop = float(recent["low"].min())
-    else:
-        stop = float(recent["high"].max())
+    stop = _compute_stop(ltf, dirn, entry, cfg)
     risk_distance = abs(entry - stop)
     if risk_distance <= 0:
         return None
@@ -1242,8 +1436,10 @@ git commit -m "feat: telegram message formatting and resilient send"
 - Consumes: `config`, `mexc`, `indicators`, `strategy`, `state`, `telegram`.
 - Produces:
   - `signalbot.main.process_symbol(symbol, cfg, deps) -> Signal | None` — fetches
-    3 timeframes via `deps["get_klines"]`, adds EMAs, evaluates. `deps` is a dict
-    of injectable functions so this is testable without network.
+    3 timeframes via `deps["get_klines"]`, adds EMAs (all TFs) plus ATR and RSI
+    (lower TF), then evaluates. `deps` (`get_klines`, `add_emas`, `add_atr`,
+    `add_rsi`, `send`) is a dict of injectable functions so this is testable
+    without network.
   - `signalbot.main.run(config_path, state_path, token, chat_id, deps=None) -> int`
     — loops symbols, dedupes, sends, saves state; returns count of alerts sent.
   - `signalbot.main.main()` — CLI entry reading env vars; called by `__main__`.
@@ -1284,27 +1480,37 @@ def _ltf():
     })
 
 
+def _fake_get(symbol, tf, limit):
+    """Return frames with all indicator columns pre-injected (deterministic)."""
+    frames = {"4h": _bull_htf(), "1h": _mtf(), "15m": _ltf()}
+    df = frames[tf].copy()
+    if tf == "4h":
+        df["ema100"] = [5, 5.2, 5.5, 5.8, 6.1, 6.4, 6.7]
+        df["ema200"] = [4, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6]
+    if tf == "1h":
+        df["ema21"] = [17.9] * 7
+        df["ema55"] = [17.0] * 7
+    if tf == "15m":
+        df["ema21"] = [10, 10, 10]
+        df["atr14"] = [1.0, 1.0, 1.0]
+        df["rsi14"] = [50, 55, 58]   # not overbought -> RSI gate passes
+    return df
+
+
+# identity stubs: columns are already injected by _fake_get
+_IDENTITY_DEPS = {
+    "get_klines": _fake_get,
+    "add_emas": lambda df, periods: df,
+    "add_atr": lambda df, period: df,
+    "add_rsi": lambda df, period: df,
+}
+
+
 def test_process_symbol_returns_signal():
     cfg = {**DEFAULTS, "swing_strength": 1, "pullback_lookback": 5,
            "tolerance": 0.2, "swing_lookback": 3, "min_rr": 0.1,
            "max_stop_pct": 0.9, "ema_slow": 100, "ema_trend": 200}
-    frames = {"4h": _bull_htf(), "1h": _mtf(), "15m": _ltf()}
-
-    # inject EMA columns via a fake get_klines that returns pre-emafied frames
-    def fake_get(symbol, tf, limit):
-        df = frames[tf].copy()
-        if tf == "4h":
-            df["ema100"] = [5, 5.2, 5.5, 5.8, 6.1, 6.4, 6.7]
-            df["ema200"] = [4, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6]
-        if tf == "1h":
-            df["ema21"] = [17.9] * 7
-            df["ema55"] = [17.0] * 7
-        if tf == "15m":
-            df["ema21"] = [10, 10, 10]
-        return df
-
-    deps = {"get_klines": fake_get, "add_emas": lambda df, periods: df}
-    sig = main.process_symbol("BTC_USDT", cfg, deps)
+    sig = main.process_symbol("BTC_USDT", cfg, dict(_IDENTITY_DEPS))
     assert sig is not None
     assert sig.direction == "long"
 
@@ -1313,29 +1519,20 @@ def test_run_dedupes_and_counts(tmp_path):
     cfg = {**DEFAULTS, "symbols": ["BTC_USDT"], "swing_strength": 1,
            "pullback_lookback": 5, "tolerance": 0.2, "swing_lookback": 3,
            "min_rr": 0.1, "max_stop_pct": 0.9}
+    # main.run reloads config from disk, so write these overrides to a file
+    import yaml
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "symbols": ["BTC_USDT"], "swing_strength": 1, "pullback_lookback": 5,
+        "tolerance": 0.2, "swing_lookback": 3, "min_rr": 0.1,
+        "max_stop_pct": 0.9,
+    }))
     sent = []
-
-    def fake_get(symbol, tf, limit):
-        frames = {"4h": _bull_htf(), "1h": _mtf(), "15m": _ltf()}
-        df = frames[tf].copy()
-        if tf == "4h":
-            df["ema100"] = [5, 5.2, 5.5, 5.8, 6.1, 6.4, 6.7]
-            df["ema200"] = [4, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6]
-        if tf == "1h":
-            df["ema21"] = [17.9] * 7
-            df["ema55"] = [17.0] * 7
-        if tf == "15m":
-            df["ema21"] = [10, 10, 10]
-        return df
-
-    deps = {
-        "get_klines": fake_get,
-        "add_emas": lambda df, periods: df,
-        "send": lambda text, token, chat_id: (sent.append(text) or True),
-    }
+    deps = dict(_IDENTITY_DEPS)
+    deps["send"] = lambda text, token, chat_id: (sent.append(text) or True)
     sp = str(tmp_path / "state.json")
-    n1 = main.run(None, sp, "tok", "chat", deps=deps)
-    n2 = main.run(None, sp, "tok", "chat", deps=deps)  # same candle -> deduped
+    n1 = main.run(str(cfg_path), sp, "tok", "chat", deps=deps)
+    n2 = main.run(str(cfg_path), sp, "tok", "chat", deps=deps)  # same candle -> deduped
     assert n1 == 1
     assert n2 == 0
     assert len(sent) == 1
@@ -1361,6 +1558,8 @@ def _default_deps():
     return {
         "get_klines": mexc.get_klines,
         "add_emas": indicators.add_emas,
+        "add_atr": indicators.add_atr,
+        "add_rsi": indicators.add_rsi,
         "send": telegram.send,
     }
 
@@ -1368,6 +1567,8 @@ def _default_deps():
 def process_symbol(symbol, cfg, deps):
     get_klines = deps["get_klines"]
     add_emas = deps["add_emas"]
+    add_atr = deps["add_atr"]
+    add_rsi = deps["add_rsi"]
     limit = cfg["kline_limit"]
 
     htf = add_emas(get_klines(symbol, cfg["higher_tf"], limit),
@@ -1376,6 +1577,8 @@ def process_symbol(symbol, cfg, deps):
                    [cfg["ema_fast"], cfg["ema_mid"]])
     ltf = add_emas(get_klines(symbol, cfg["lower_tf"], limit),
                    [cfg["ema_fast"]])
+    ltf = add_atr(ltf, cfg["atr_period"])   # for ATR-based stops
+    ltf = add_rsi(ltf, cfg["rsi_period"])   # for the RSI entry filter
     return strategy.evaluate(symbol, htf, mtf, ltf, cfg)
 
 
@@ -1587,15 +1790,20 @@ git commit -m "feat: github actions schedule and setup docs"
 ## Self-Review Notes
 
 - **Spec coverage:** configurable 3 TFs (Task 1), timeframe allow-list validation
-  (Task 1/4), EMAs (Task 2), market-structure objective rules (Task 3), MEXC fetch
-  (Task 4), direction/setup/five-trigger entry + target/R:R/max-stop filters
-  (Task 5), dedupe state (Task 6), Telegram formatting/send (Task 7), orchestration
-  with per-symbol error isolation (Task 8), GitHub Actions cron + state commit +
-  BotFather setup (Task 9). All spec sections map to a task.
+  (Task 1/4), EMA + ATR + RSI indicators (Task 2), market-structure objective rules
+  (Task 3), MEXC fetch (Task 4), direction/setup/five-trigger entry + RSI filter +
+  ATR stops + target/R:R/max-stop filters (Task 5), dedupe state (Task 6), Telegram
+  formatting/send (Task 7), orchestration with per-symbol error isolation and
+  ATR/RSI column wiring (Task 8), GitHub Actions cron + state commit + BotFather
+  setup (Task 9). All spec sections map to a task.
 - **Type consistency:** `Signal` fields defined in Task 5 are consumed unchanged in
   Tasks 6–8; `get_klines(symbol, timeframe, limit)`, `add_emas(df, periods)`,
+  `add_atr(df, period)`, `add_rsi(df, period)`,
   `evaluate(symbol, htf, mtf, ltf, cfg)`, `send(text, token, chat_id, ...)`,
-  `make_key(signal)` signatures match across tasks.
+  `make_key(signal)` signatures match across tasks. The `swing_atr`/`atr`/`swing`
+  values of `stop_mode` and the `rsi_enabled`/`rsi_overbought`/`rsi_oversold` keys
+  are consistent between config (Task 1), strategy (Task 5), and orchestration
+  (Task 8).
 - **Note on test fixtures:** several strategy/structure tests use hand-built OHLC
   and hand-set EMA columns to isolate logic from 250-candle EMA warmup. If a
   fixture's swings don't match the comment, adjust the fixture data, never the

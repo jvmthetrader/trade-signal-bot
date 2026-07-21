@@ -19,6 +19,8 @@ infrastructure, no exchange API key required (price data is public).
 | Strategy | 3-timeframe: higher = direction, middle = setup, lower = entry |
 | Timeframes | **Configurable** (`higher_tf` / `middle_tf` / `lower_tf`), default 4h / 1h / 15m |
 | Entry triggers | Any of five confirmations (OR), each toggleable in config |
+| Entry filter | **RSI** (Wilder, entry TF) rejects over-extended entries |
+| Stops | **ATR-based** (`stop_mode`: swing / atr / swing_atr), swing_atr default |
 | Alert content | Direction, entry, stop, target, R:R, **position size** |
 | Hosting | GitHub Actions, 15-minute cron (free) |
 | Dedupe | `state.json` committed back to repo each run |
@@ -88,10 +90,27 @@ trigger is true (all default ON, each toggleable):
 Short triggers are the exact mirrors (red candle, bearish engulfing, upper-wick
 rejection, close below swing-low, LH-then-LL).
 
+### RSI filter (entry TF) — "don't chase extremes"
+After a trigger fires, an RSI gate can veto the entry (`rsi_enabled`, default on;
+`rsi_period` 14, Wilder's smoothing, computed on the entry/lower TF close):
+- **Long rejected** if `RSI >= rsi_overbought` (default 70).
+- **Short rejected** if `RSI <= rsi_oversold` (default 30).
+This reinforces the "avoid entering into over-extended price" rule without
+over-filtering normal pullbacks. Set `rsi_enabled: false` to disable.
+
 ### Trade plan
 - **Entry** = trigger candle close.
-- **Stop** = lowest low of last `swing_lookback` lower-TF candles (long) /
-  highest high (short) — the invalidation point.
+- **ATR** = Wilder's Average True Range over `atr_period` (default 14) on the
+  lower TF.
+- **Stop** depends on `stop_mode` (default `swing_atr`):
+  - `swing` — lowest low of last `swing_lookback` lower-TF candles (long) /
+    highest high (short). The original swing invalidation.
+  - `atr` — `entry - atr_mult * ATR` (long) / `entry + atr_mult * ATR` (short),
+    `atr_mult` default 2.0.
+  - `swing_atr` — the swing extreme padded by `atr_buffer_mult * ATR`
+    (default 0.5): `swing_low - atr_buffer_mult*ATR` (long) /
+    `swing_high + atr_buffer_mult*ATR` (short). Keeps the swing basis but adds a
+    volatility cushion so ordinary wicks don't trigger the stop.
 - **Risk distance** = `abs(entry - stop)`.
 - **Target** = nearest swing high (long) / swing low (short) on the middle or
   higher TF that is beyond entry ("previous resistance/support"); if none is
@@ -109,11 +128,14 @@ rejection, close below swing-low, LH-then-LL).
 - **`config.yaml`** — `symbols[]`; `higher_tf`/`middle_tf`/`lower_tf`; EMA periods;
   `swing_strength`; `slope_lookback`; `pullback_lookback`; `swing_lookback`;
   tolerances/separations; `triggers{}` toggles; `rejection_ratio`; `rr_default`;
-  `min_rr`; `max_stop_pct`; `balance`; `risk_pct`.
+  `min_rr`; `max_stop_pct`; `balance`; `risk_pct`; `atr_period`; `stop_mode`;
+  `atr_mult`; `atr_buffer_mult`; `rsi_enabled`; `rsi_period`; `rsi_overbought`;
+  `rsi_oversold`.
 - **`mexc.py`** — `get_klines(symbol, interval, limit)` from
   `https://contract.mexc.com/api/v1/contract/kline/{symbol}`; timeframe→interval
   mapping + validation. Pure fetch/parse; raises on failure.
-- **`indicators.py`** — `ema(values, period)`; attach EMA columns. No I/O.
+- **`indicators.py`** — `ema`, `atr` (Wilder), `rsi` (Wilder), and column-adders
+  (`add_emas`, `add_atr`, `add_rsi`). No I/O.
 - **`structure.py`** — swing detection + the structure predicates above. No I/O.
 - **`strategy.py`** — `evaluate(symbol, htf, mtf, ltf, cfg)` → `Signal | None`.
   Pure; all rules above; no network.
@@ -162,21 +184,23 @@ cron (15 min)
 TF: 4h dir / 1h setup / 15m entry
 Trigger: break of structure + close>EMA21
 Entry:  64,200
-Stop:   63,600   (15m swing low)
-Target: 65,800   (prev 1h high) | R:R 2.7
+Stop:   63,450   (15m swing low − 0.5·ATR)
+Target: 65,800   (prev 1h high) | R:R 2.1
 Risk:   1.0% of 1,000 = 10 USDT
 Size:   0.0166 BTC  (notional ~1,066 USDT)
 ```
 
 ## Testing (TDD)
 
-- **indicators:** EMA vs known reference values.
+- **indicators:** EMA vs known reference values; ATR of constant-range candles
+  equals that range; RSI → ~100 for a strictly rising series, ~0 for falling.
 - **structure:** synthetic series → correct swing points; HH/HL vs LH/LL;
   higher-low / break-of-structure detection.
 - **strategy:** synthetic 3-TF fixtures — MUST fire (clean direction+setup+
   trigger), MUST NOT fire (no direction / no pullback / no higher low / no
-  trigger / R:R too low / stop too wide). Long and short mirrors. Each trigger
-  toggled independently.
+  trigger / R:R too low / stop too wide / RSI over-extended). Long and short
+  mirrors. Each trigger toggled independently. ATR stop is wider than the raw
+  swing stop; RSI gate blocks an overbought long.
 - **state:** dedupe round-trips; tolerates missing/corrupt file.
 - **mexc:** parse a captured sample response (no live network in tests).
 
