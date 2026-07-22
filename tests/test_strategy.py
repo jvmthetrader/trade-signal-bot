@@ -161,3 +161,90 @@ def test_rsi_gate_allows_normal_long():
             tolerance=0.2, swing_lookback=3, min_rr=0.1, max_stop_pct=0.9,
             stop_mode="swing", rsi_enabled=True, rsi_overbought=70)
     assert strategy.evaluate("BTC_USDT", htf, mtf, ltf, c) is not None
+
+
+def _htf_bear():
+    # falling EMAs, price below both, LH+LL structure (strength 1)
+    highs = [16, 11, 14, 9, 12, 8, 10]
+    lows = [12, 9, 10, 7, 8, 5, 6]
+    close = [15, 10, 13, 8, 11, 7, 9]
+    df = pd.DataFrame({"high": highs, "low": lows, "close": close,
+                       "open": close})
+    df["ema100"] = [15, 14.7, 14.4, 14.1, 13.8, 13.5, 13.2]
+    df["ema200"] = [20, 19.5, 19, 18.5, 18, 17.5, 17]  # falling, above ema100
+    return df
+
+
+def test_direction_short_when_bearish():
+    c = cfg(ema_slow=100, ema_trend=200, swing_strength=1, slope_lookback=3)
+    assert strategy.direction(_htf_bear(), c) == "short"
+
+
+def test_setup_short_true_with_rally_and_lower_high():
+    # ema21<ema55, recent highs rally up into the ema zone, lower highs forming
+    highs = [9, 11, 8, 10, 7, 9, 6]   # swing highs falling (LH)
+    lows = [3] * 7
+    df = pd.DataFrame({"high": highs, "low": lows,
+                       "close": [4] * 7, "open": [4] * 7})
+    df["ema21"] = [4.1] * 7
+    df["ema55"] = [5.0] * 7   # ema21 < ema55
+    c = cfg(ema_fast=21, ema_mid=55, swing_strength=1,
+            pullback_lookback=5, tolerance=0.2)
+    assert strategy.setup(df, "short", c) is True
+
+
+def test_trigger_close_back_ema21_short():
+    df = pd.DataFrame({
+        "open": [10, 10, 11.0],
+        "high": [11, 11, 11],
+        "low": [9, 8, 8.5],
+        "close": [10, 9, 8.5],
+    })
+    df["ema21"] = [10, 10, 10]  # last close 8.5 < ema21 and red
+    c = cfg(ema_fast=21, swing_strength=1,
+            triggers={"close_back_ema21": True, "engulfing": False,
+                      "rejection": False, "break_structure": False,
+                      "hl_then_hh": False})
+    assert strategy.trigger(df, "short", c) == "close_back_ema21"
+
+
+def test_evaluate_end_to_end_short_produces_signal():
+    htf = _htf_bear()
+    mtf = pd.DataFrame({"high": [9, 11, 8, 10, 7, 9, 6], "low": [3] * 7,
+                        "close": [4] * 7, "open": [4] * 7})
+    mtf["ema21"] = [4.1] * 7
+    mtf["ema55"] = [5.0] * 7
+    ltf = pd.DataFrame({
+        "time": [1, 2, 3],
+        "open": [10, 10, 11.0],
+        "high": [11, 11, 11],
+        "low": [9, 8, 8.5],
+        "close": [10, 9, 8.5],
+        "ema21": [10, 10, 10],
+    })
+    c = cfg(ema_fast=21, ema_mid=55, ema_slow=100, ema_trend=200,
+            swing_strength=1, pullback_lookback=5, tolerance=0.2,
+            swing_lookback=3, min_rr=0.1, max_stop_pct=0.9,
+            balance=1000.0, risk_pct=0.01,
+            stop_mode="swing", rsi_enabled=False)
+    sig = strategy.evaluate("BTC_USDT", htf, mtf, ltf, c)
+    assert sig is not None
+    assert sig.direction == "short"
+    assert sig.entry == 8.5
+    assert sig.stop > sig.entry          # stop above entry for short
+    assert sig.target < sig.entry        # target below entry
+    assert sig.position_size > 0
+    assert sig.trigger == "close_back_ema21"
+
+
+def test_atr_stop_mode_pure():
+    htf, mtf, ltf = _long_frames()
+    ltf["atr14"] = [1.0, 1.0, 1.2]
+    c = cfg(ema_fast=21, ema_mid=55, swing_strength=1, pullback_lookback=5,
+            tolerance=0.2, swing_lookback=3, min_rr=0.1, max_stop_pct=0.9,
+            rsi_enabled=False, stop_mode="atr", atr_period=14, atr_mult=2.0)
+    sig = strategy.evaluate("BTC_USDT", htf, mtf, ltf, c)
+    assert sig is not None
+    entry = 10.5
+    atr = 1.2
+    assert sig.stop == round(entry - 2.0 * atr, 8)
