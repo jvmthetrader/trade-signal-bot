@@ -35,8 +35,8 @@ fi
 chmod 600 deploy/.env
 chmod +x deploy/run.sh deploy/vm-setup.sh
 
-# 4. Install/refresh the cron job (every 15 minutes), de-duplicating our line.
-CRON_LINE="*/15 * * * * $PROJECT_DIR/deploy/run.sh"
+# 4. Install/refresh the cron job (every 5 minutes), de-duplicating our line.
+CRON_LINE="*/5 * * * * $PROJECT_DIR/deploy/run.sh"
 ( crontab -l 2>/dev/null | grep -v "deploy/run.sh" || true; echo "$CRON_LINE" ) | crontab -
 echo ">> Cron installed:"
 crontab -l | grep "deploy/run.sh"

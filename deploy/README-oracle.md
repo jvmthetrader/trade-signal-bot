@@ -38,41 +38,50 @@ From your PC terminal (Windows has built-in `ssh`). Replace the key path and IP:
 If it complains the key is too open on Windows, that's usually fine to proceed;
 on macOS/Linux run `chmod 600 your-private-key.key` first.
 
-## 4. Copy the project onto the VM
-From your PC (a SECOND terminal, not the SSH one), from the folder ABOVE the project:
+## 4. Get the project onto the VM
+The repo is **public**, so just clone it directly in the SSH session — no file
+copying or SSH-key juggling needed:
 
-    scp -i "C:/path/to/your-private-key.key" -r "c:/Users/ADMIN/Desktop/m4ck/trade signal" ubuntu@YOUR_VM_PUBLIC_IP:~/trade-signal
+    git clone https://github.com/jvmthetrader/trade-signal-bot.git
+    cd trade-signal-bot
 
-This uploads everything to `~/trade-signal` on the VM.
-(Tip: it also copies `logs/` and any local `deploy/.env` if present — that's fine.)
+(To update later: `git pull` — no re-copy needed.)
 
 ## 5. Set it up on the VM
-Back in the SSH session:
+Still in the SSH session, from inside `trade-signal-bot`:
 
-    cd ~/trade-signal
     bash deploy/vm-setup.sh
 
 This installs Python + dependencies and installs a cron job that runs the bot
-every 15 minutes. Then set your secrets and test once:
+**every 5 minutes**. Then set your secrets and test once:
 
     nano deploy/.env        # paste your TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, save (Ctrl+O, Enter, Ctrl+X)
     bash deploy/run.sh      # one manual run
     tail -n 20 logs/bot.log # check output ("0 alert(s) sent" is normal)
 
 You'll get a Telegram alert only when a real signal fires. Cron keeps it running
-24/7 from now on.
+24/7 from now on — on a precise 5-minute schedule (unlike GitHub's loose cron).
 
-## 6. Edit your coin list / risk settings
+## 6. IMPORTANT — turn off GitHub Actions to avoid DOUBLE alerts
+Your bot is currently also running on GitHub Actions. If you leave both on, you'll
+get **every alert twice** (once from GitHub, once from the VM) and they keep
+separate state. Pick ONE. To disable the GitHub one:
+- GitHub repo → **Actions** tab → **trade-signal** workflow (left) → **···** menu
+  (top right) → **Disable workflow**.
+(You can re-enable it anytime; the VM becomes your single source of alerts.)
+
+## 7. Edit your coin list / risk settings
     nano config.yaml        # symbols, balance, risk_pct, thresholds
-Changes take effect on the next 15-minute run. No restart needed.
+Changes take effect on the next 5-minute run. No restart needed.
 
 ---
 
 ## Managing it
 - **See it run live:** `tail -f logs/bot.log`
 - **View schedule:** `crontab -l`
+- **Change the interval:** `crontab -e` → edit the `*/5` (e.g. `*/15` for 15 min).
 - **Pause/stop:** `crontab -e` and delete (or comment out) the `deploy/run.sh` line.
-- **Update the code later:** re-run the `scp` command from step 4, then it just keeps going.
+- **Update the code later:** `git pull` inside `trade-signal-bot` — cron keeps going.
 
 ## Security notes
 - `deploy/.env` holds your Telegram token in plain text but is `chmod 600`
