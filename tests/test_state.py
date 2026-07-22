@@ -32,3 +32,11 @@ def test_make_key_uses_signal_fields():
         timeframes = ("4h", "1h", "15m")
         trigger_time = 999
     assert state.make_key(Fake()) == "BTC_USDT:long:15m:999"
+
+
+def test_record_caps_alerted_list_at_max_and_keeps_most_recent():
+    s = {"alerted": [f"key{i}" for i in range(state.MAX_ALERTED)]}
+    state.record(s, "newest")
+    assert len(s["alerted"]) == state.MAX_ALERTED
+    assert s["alerted"][-1] == "newest"
+    assert "key0" not in s["alerted"]  # oldest evicted

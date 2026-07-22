@@ -1,6 +1,8 @@
 import json
 import os
 
+MAX_ALERTED = 500  # cap the alerted-keys list so state.json doesn't grow unbounded
+
 
 def load(path: str) -> dict:
     if not os.path.exists(path):
@@ -25,6 +27,7 @@ def record(state: dict, key: str) -> None:
     alerted = state.setdefault("alerted", [])
     if key not in alerted:
         alerted.append(key)
+    alerted[:] = alerted[-MAX_ALERTED:]
 
 
 def make_key(signal) -> str:

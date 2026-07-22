@@ -39,6 +39,7 @@ DEFAULTS = {
     "balance": 1000.0,
     "risk_pct": 0.01,
     "kline_limit": 400,
+    "min_candles": 250,  # warmup guard: need enough history for EMA200 etc.
     # ATR-based stops
     "atr_period": 14,
     "stop_mode": "swing_atr",   # "swing" | "atr" | "swing_atr"

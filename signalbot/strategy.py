@@ -39,20 +39,33 @@ def direction(htf: pd.DataFrame, cfg: dict) -> str | None:
     rising = ema_trend_now > ema_trend_prev
     falling = ema_trend_now < ema_trend_prev
 
+    def _flat_or_tangled() -> bool:
+        # Avoid acting on a flat trend-EMA slope or a tangled slow/trend EMA
+        # pair (default thresholds are 0.0, i.e. disabled).
+        if close <= 0:
+            return False
+        slope_pct = abs(ema_trend_now - ema_trend_prev) / close
+        if slope_pct < cfg["min_slope_pct"]:
+            return True
+        sep_pct = abs(ema_slow - ema_trend_now) / close
+        if sep_pct < cfg["min_htf_separation_pct"]:
+            return True
+        return False
+
     if (
         close > ema_trend_now
         and ema_slow > ema_trend_now
         and rising
         and structure.is_bullish_structure(htf, strength)
     ):
-        return "long"
+        return None if _flat_or_tangled() else "long"
     if (
         close < ema_trend_now
         and ema_slow < ema_trend_now
         and falling
         and structure.is_bearish_structure(htf, strength)
     ):
-        return "short"
+        return None if _flat_or_tangled() else "short"
     return None
 
 
@@ -64,7 +77,11 @@ def setup(mtf: pd.DataFrame, direction: str, cfg: dict) -> bool:
     tol = cfg["tolerance"]
     ema_fast = float(_col(mtf, "ema", fast).iloc[-1])
     ema_mid = float(_col(mtf, "ema", mid).iloc[-1])
+    close = float(mtf["close"].iloc[-1])
     recent = mtf.iloc[-look:]
+
+    if close > 0 and abs(ema_fast - ema_mid) / close < cfg["min_mtf_separation_pct"]:
+        return False  # mtf EMAs tangled -> no clean setup
 
     if direction == "long":
         if not ema_fast > ema_mid:

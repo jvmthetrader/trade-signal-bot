@@ -237,6 +237,59 @@ def test_evaluate_end_to_end_short_produces_signal():
     assert sig.trigger == "close_back_ema21"
 
 
+def test_direction_none_when_slope_too_flat():
+    # Default min_slope_pct=0.0 lets this fixture fire long (see
+    # test_direction_long_when_bullish); a nonzero threshold higher than the
+    # fixture's actual slope must veto it as a "flat trend".
+    c = cfg(ema_slow=100, ema_trend=200, swing_strength=1, slope_lookback=3,
+            min_slope_pct=1.0)
+    assert strategy.direction(_htf_bull(), c) is None
+
+
+def test_direction_none_when_htf_tangled():
+    # Same fixture, but a nonzero min_htf_separation_pct larger than the
+    # actual ema100/ema200 separation must veto it as "tangled".
+    c = cfg(ema_slow=100, ema_trend=200, swing_strength=1, slope_lookback=3,
+            min_htf_separation_pct=1.0)
+    assert strategy.direction(_htf_bull(), c) is None
+
+
+def test_direction_short_still_blocked_by_slope_filter():
+    c = cfg(ema_slow=100, ema_trend=200, swing_strength=1, slope_lookback=3,
+            min_slope_pct=1.0)
+    assert strategy.direction(_htf_bear(), c) is None
+
+
+def test_direction_default_thresholds_unaffected():
+    # default 0.0 thresholds => filters disabled, existing behavior holds
+    c = cfg(ema_slow=100, ema_trend=200, swing_strength=1, slope_lookback=3)
+    assert strategy.direction(_htf_bull(), c) == "long"
+
+
+def test_setup_false_when_mtf_tangled():
+    lows = [5, 3, 6, 4, 7, 5, 8]
+    highs = [9, 9, 9, 9, 9, 9, 9]
+    df = pd.DataFrame({"high": highs, "low": lows,
+                       "close": [8] * 7, "open": [8] * 7})
+    df["ema21"] = [7.9] * 7
+    df["ema55"] = [7.0] * 7
+    c = cfg(ema_fast=21, ema_mid=55, swing_strength=1,
+            pullback_lookback=5, tolerance=0.2, min_mtf_separation_pct=1.0)
+    assert strategy.setup(df, "long", c) is False
+
+
+def test_setup_default_threshold_unaffected():
+    lows = [5, 3, 6, 4, 7, 5, 8]
+    highs = [9, 9, 9, 9, 9, 9, 9]
+    df = pd.DataFrame({"high": highs, "low": lows,
+                       "close": [8] * 7, "open": [8] * 7})
+    df["ema21"] = [7.9] * 7
+    df["ema55"] = [7.0] * 7
+    c = cfg(ema_fast=21, ema_mid=55, swing_strength=1,
+            pullback_lookback=5, tolerance=0.2)
+    assert strategy.setup(df, "long", c) is True
+
+
 def test_atr_stop_mode_pure():
     htf, mtf, ltf = _long_frames()
     ltf["atr14"] = [1.0, 1.0, 1.2]
