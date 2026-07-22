@@ -152,3 +152,40 @@ def test_process_symbol_returns_none_when_below_min_candles():
     assert cfg["min_candles"] == 250  # sanity: guard is on by default
     sig = main.process_symbol("BTC_USDT", cfg, dict(_IDENTITY_DEPS))
     assert sig is None
+
+
+def test_run_isolates_send_error_and_continues(tmp_path):
+    """When deps["send"] raises for one symbol, run() logs it, continues to
+    the next symbol, and still calls state.save exactly once at the end."""
+    cfg = {**DEFAULTS, "symbols": ["BTC_USDT", "ETH_USDT"], "swing_strength": 1,
+           "pullback_lookback": 5, "tolerance": 0.2, "swing_lookback": 3,
+           "min_rr": 0.1, "max_stop_pct": 0.9, "min_candles": 1}
+    # Write config to disk as run() reloads from file
+    import yaml
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "symbols": ["BTC_USDT", "ETH_USDT"], "swing_strength": 1,
+        "pullback_lookback": 5, "tolerance": 0.2, "swing_lookback": 3,
+        "min_rr": 0.1, "max_stop_pct": 0.9, "min_candles": 1,
+    }))
+    # Track send calls: raise on first, succeed on second
+    call_log = []
+
+    def send_with_error_on_first(text, token, chat_id):
+        call_log.append({"text": text, "token": token, "chat_id": chat_id})
+        if len(call_log) == 1:
+            raise ValueError("Simulated send failure on first symbol")
+        return True
+
+    deps = dict(_IDENTITY_DEPS)
+    deps["send"] = send_with_error_on_first
+    sp = str(tmp_path / "state.json")
+    n = main.run(str(cfg_path), sp, "tok", "chat", deps=deps)
+    # run() should not raise; should have continued past first symbol's error
+    assert n == 1, f"Expected 1 successful send, got {n}"
+    assert len(call_log) == 2, f"Expected send called twice, got {len(call_log)}"
+    # Verify state file was saved (proving state.save ran after the loop)
+    import json
+    assert (tmp_path / "state.json").exists(), "state.json was not created"
+    state_data = json.loads((tmp_path / "state.json").read_text())
+    assert isinstance(state_data, dict), "state file should deserialize to a dict"
