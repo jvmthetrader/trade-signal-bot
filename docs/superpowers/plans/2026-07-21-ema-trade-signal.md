@@ -409,7 +409,7 @@ def add_rsi(df: pd.DataFrame, period: int) -> pd.DataFrame:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_indicators.py -v`
-Expected: 8 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
 
