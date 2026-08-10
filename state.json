@@ -2,6 +2,7 @@
   "alerted": [
     "BNB_USDT:long:5m:1786201200",
     "BNB_USDT:long:5m:1786210800",
-    "LTC_USDT:long:5m:1786302900"
+    "LTC_USDT:long:5m:1786302900",
+    "XRP_USDT:short:5m:1786402800"
   ]
 }
