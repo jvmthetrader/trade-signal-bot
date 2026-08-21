@@ -16,6 +16,10 @@
     "AVAX_USDT:long:5m:1787258700",
     "BTC_USDT:long:5m:1787269800",
     "BNB_USDT:long:5m:1787282700",
-    "BTC_USDT:long:5m:1787298300"
+    "BTC_USDT:long:5m:1787298300",
+    "BTC_USDT:long:5m:1787303400",
+    "ETH_USDT:long:5m:1787303400",
+    "SOL_USDT:long:5m:1787303400",
+    "XRP_USDT:long:5m:1787303400"
   ]
 }
