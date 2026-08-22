@@ -35,6 +35,9 @@
     "LINK_USDT:long:5m:1787348100",
     "ETH_USDT:long:5m:1787351400",
     "ETH_USDT:long:5m:1787359200",
-    "LINK_USDT:long:5m:1787359200"
+    "LINK_USDT:long:5m:1787359200",
+    "SOL_USDT:long:5m:1787370300",
+    "DOGE_USDT:long:5m:1787370300",
+    "ADA_USDT:long:5m:1787370300"
   ]
 }
