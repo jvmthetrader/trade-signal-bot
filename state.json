@@ -49,6 +49,7 @@
     "XRP_USDT:long:5m:1787805000",
     "SOL_USDT:long:5m:1787844300",
     "LTC_USDT:long:5m:1788464700",
-    "LTC_USDT:long:5m:1788656400"
+    "LTC_USDT:long:5m:1788656400",
+    "BTC_USDT:short:5m:1789483800"
   ]
 }
