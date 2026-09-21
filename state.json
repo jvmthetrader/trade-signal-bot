@@ -51,6 +51,7 @@
     "LTC_USDT:long:5m:1788464700",
     "LTC_USDT:long:5m:1788656400",
     "BTC_USDT:short:5m:1789483800",
-    "AVAX_USDT:long:5m:1789775700"
+    "AVAX_USDT:long:5m:1789775700",
+    "BNB_USDT:long:5m:1789999500"
   ]
 }
